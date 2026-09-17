@@ -581,7 +581,7 @@ def main() -> None:
     parser.add_argument("--dr-max", type=int, default=6)
     parser.add_argument("--frames-dir", default="imgs/frames")
     parser.add_argument("--grids-dir", default="imgs/grids")
-    parser.add_argument("--outdir", default="imgs/stitching")
+    parser.add_argument("--stitching-dir", default="imgs/stitching")
     parser.add_argument("--solve", action="store_true", help="run the solver on the merged grid")
     args = parser.parse_args()
 
@@ -596,7 +596,7 @@ def main() -> None:
         captured = args.capture
 
     all_frames = stitch_mod.load_frames(args.frames_dir)
-    if args.all or (captured and captured != 2):
+    if args.all or (captured and captured != 2) or len(all_frames) < 2:
         frames = all_frames
     else:
         frames = [all_frames[int(args.a)], all_frames[int(args.b)]]
@@ -604,7 +604,7 @@ def main() -> None:
     images = [frame for frame, _offset in frames]
     cell = args.cell if args.cell > 0 else reference_cell(images)
     print(f"cell = {cell:.2f}px, frames = {len(frames)}")
-    os.makedirs(args.outdir, exist_ok=True)
+    os.makedirs(args.stitching_dir, exist_ok=True)
 
     if args.all or len(frames) > 2:
         symbols, provenance, positions, cell, stats, grids = stitch_all(frames, cell=cell)
@@ -617,8 +617,8 @@ def main() -> None:
         grid, occupancy, heads, _model, _trim = to_model(
             symbols, provenance, cell, grids, positions
         )
-        cv2.imwrite(os.path.join(args.outdir, "merged.png"), render(symbols, provenance))
-        with open(os.path.join(args.outdir, "merged.txt"), "w", encoding="utf-8") as handle:
+        cv2.imwrite(os.path.join(args.stitching_dir, "merged.png"), render(symbols, provenance))
+        with open(os.path.join(args.stitching_dir, "merged.txt"), "w", encoding="utf-8") as handle:
             handle.write(
                 f"# merged cell={cell:.3f} rows={grid.rows} cols={grid.cols} "
                 f"conflicts={stats['conflicts']} heads={len(heads)} "
@@ -632,7 +632,13 @@ def main() -> None:
             print(f"playable moves: {len(moves)} / {len(heads)} arrows")
             for row, col, direction in moves[:40]:
                 print(f"  ({row},{col}) {direction}")
-        print(f"saved grids in {args.grids_dir}/ and merged in {args.outdir}/")
+        print(f"saved grids in {args.grids_dir}/ and merged in {args.stitching_dir}/")
+        return
+
+    if len(frames) < 2:
+        grid_a = extract_grid(images[0], cell, source="frame_00")
+        save_grids([grid_a], args.grids_dir)
+        print(f"only one frame - saved its grid in {args.grids_dir}/, nothing to stitch")
         return
 
     grid_a = extract_grid(images[0], cell, source="frame_00")
@@ -664,9 +670,9 @@ def main() -> None:
         f"heads={stats['heads']}"
     )
     origin = (grid_a.phase[0], grid_a.phase[1])
-    save_merged_txt(os.path.join(args.outdir, "merged.txt"), merged, provenance, cell, origin, stats)
-    cv2.imwrite(os.path.join(args.outdir, "merged.png"), render(merged, provenance))
-    print(f"saved grid_00/grid_01 in {args.grids_dir}/ and merged in {args.outdir}/")
+    save_merged_txt(os.path.join(args.stitching_dir, "merged.txt"), merged, provenance, cell, origin, stats)
+    cv2.imwrite(os.path.join(args.stitching_dir, "merged.png"), render(merged, provenance))
+    print(f"saved grid_00/grid_01 in {args.grids_dir}/ and merged in {args.stitching_dir}/")
 
 
 if __name__ == "__main__":

@@ -205,7 +205,7 @@ def play(args: argparse.Namespace) -> str:
         f"view at model cell {view} (score={alignment.score:.3f} support={alignment.support})"
     )
 
-    os.makedirs(args.outdir, exist_ok=True)
+    os.makedirs(args.moves_dir, exist_ok=True)
     failures = 0
     refreshes = 0
     for move_number in range(1, args.max_moves + 1):
@@ -273,7 +273,7 @@ def play(args: argparse.Namespace) -> str:
         print(f"  move {move_number}: ({row},{col}) {direction} -> tap ({sx},{sy})")
         before = frame.copy()
         cv2.circle(before, (sx, sy), 22, (0, 0, 255), 4)
-        cv2.imwrite(os.path.join(args.outdir, f"play_move_{move_number:03d}_before.png"), before)
+        cv2.imwrite(os.path.join(args.moves_dir, f"play_move_{move_number:03d}_before.png"), before)
 
         adb_client.tap(sx, sy)
         time.sleep(args.delay)
@@ -296,7 +296,7 @@ def play(args: argparse.Namespace) -> str:
         relocated = relocate(model_symbols, occupancy, heads, frame, cell, view, 6)
         if relocated is not None:
             frame_grid, view, alignment = relocated
-        cv2.imwrite(os.path.join(args.outdir, f"play_move_{move_number:03d}_after.png"), frame)
+        cv2.imwrite(os.path.join(args.moves_dir, f"play_move_{move_number:03d}_after.png"), frame)
     return "max_moves"
 
 
@@ -309,7 +309,7 @@ def main() -> None:
     parser.add_argument("--max-moves", type=int, default=300)
     parser.add_argument("--max-pans", type=int, default=10)
     parser.add_argument("--delay", type=float, default=0.3)
-    parser.add_argument("--outdir", default="imgs/stitching")
+    parser.add_argument("--moves-dir", default="imgs/moves")
     args = parser.parse_args()
 
     adb_client.ensure_device()

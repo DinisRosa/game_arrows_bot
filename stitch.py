@@ -159,16 +159,21 @@ def capture_grid(
     return frames
 
 
-def save_frame_grids(frames, outdir: str = "imgs/stitching") -> None:
-    """Save each captured frame and its arrow-based grid/heads for inspection."""
-    os.makedirs(outdir, exist_ok=True)
+def save_frame_grids(
+    frames,
+    frames_dir: str = "imgs/frames",
+    grids_dir: str = "imgs/grids",
+) -> None:
+    """Save each captured frame in frames/ and its annotated grid in grids/."""
+    os.makedirs(frames_dir, exist_ok=True)
+    os.makedirs(grids_dir, exist_ok=True)
     for index, (frame, offset) in enumerate(frames):
-        cv2.imwrite(os.path.join(outdir, f"frame_{index:02d}.png"), frame)
+        cv2.imwrite(os.path.join(frames_dir, f"frame_{index:02d}.png"), frame)
         try:
             grid, method = vision.detect_grid(frame)
             heads = vision.detect_arrowheads(frame, grid)
             vis = vision.draw_heads(vision.draw_grid(frame, grid), grid, heads)
-            cv2.imwrite(os.path.join(outdir, f"grid_{index:02d}.png"), vis)
+            cv2.imwrite(os.path.join(grids_dir, f"grid_{index:02d}.png"), vis)
             print(
                 f"  frame {index}: [{method}] cell={grid.cell_w:.1f} grid={grid.cols}x{grid.rows} "
                 f"heads={len(heads)} offset=({offset[0]:.0f},{offset[1]:.0f})",
@@ -316,7 +321,7 @@ def render_board(grid: vision.Grid, occupancy: np.ndarray, heads: dict) -> np.nd
     return image
 
 
-def stitch(adb_client, step: int = 400, max_steps: int = 8, outdir: str | None = "imgs/grid_finder"):
+def stitch(adb_client, step: int = 400, max_steps: int = 8, outdir: str | None = "imgs/stitching"):
     """Capture and merge the full board (2D)."""
     frames = capture_grid(adb_client, step=step, max_steps=max_steps, outdir=outdir)
     save_frame_grids(frames)
@@ -430,4 +435,4 @@ if __name__ == "__main__":
         grid, occupancy, heads, offset = stitch(adb_client)
         print(f"Global board: {grid.cols}x{grid.rows} cells, cell={grid.cell_w:.1f}px, heads={len(heads)}")
         print(f"Current view offset: ({offset[0]:.0f}, {offset[1]:.0f})")
-        print("Saved frames and stitch_merged.png in imgs/grid_finder/")
+        print("Saved frames in imgs/frames/, grids in imgs/grids/ and stitch_merged.png in imgs/stitching/")

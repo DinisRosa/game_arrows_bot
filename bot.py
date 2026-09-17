@@ -110,7 +110,7 @@ def play_level(frame: np.ndarray, grid: vision.Grid, args: argparse.Namespace) -
         x, y = grid.cell_center(row, col)
         print(f"  move {move_number}: ({row},{col}) {direction} -> tap ({x},{y})")
         save_debug(
-            os.path.join(args.outdir, f"move_{move_number:03d}_before.png"),
+            os.path.join(args.moves_dir, f"move_{move_number:03d}_before.png"),
             frame,
             grid,
             heads,
@@ -133,7 +133,7 @@ def play_level(frame: np.ndarray, grid: vision.Grid, args: argparse.Namespace) -
             if failures >= 2:
                 return "stuck"
         save_debug(
-            os.path.join(args.outdir, f"move_{move_number:03d}_after.png"),
+            os.path.join(args.moves_dir, f"move_{move_number:03d}_after.png"),
             frame,
             grid,
             vision.detect_arrowheads(frame, grid),
@@ -236,7 +236,7 @@ def ensure_visible(
 
 def play_cut_level(frame: np.ndarray, args: argparse.Namespace) -> str:
     """Stitch a board larger than the screen and play it on the global model."""
-    grid, occupancy, heads, offset = stitch.stitch(adb_client, outdir=args.outdir)
+    grid, occupancy, heads, offset = stitch.stitch(adb_client)
     print(f"  stitched board {grid.cols}x{grid.rows}, heads {len(heads)}, offset=({offset[0]:.0f},{offset[1]:.0f})")
     frame = capture.get_frame()
     failures = 0
@@ -275,7 +275,7 @@ def play_cut_level(frame: np.ndarray, args: argparse.Namespace) -> str:
         for hx, hy, _hd in vision.detect_head_pixels(frame, grid.cell_w):
             cv2.circle(before, (hx, hy), 6, (255, 0, 0), -1)
         cv2.circle(before, (sx, sy), 22, (0, 0, 255), 4)
-        cv2.imwrite(os.path.join(args.outdir, f"cut_move_{move_number:03d}_before.png"), before)
+        cv2.imwrite(os.path.join(args.moves_dir, f"cut_move_{move_number:03d}_before.png"), before)
         adb_client.tap(sx, sy)
         time.sleep(args.delay)
         for _ in range(6):
@@ -294,7 +294,7 @@ def play_cut_level(frame: np.ndarray, args: argparse.Namespace) -> str:
         after = frame.copy()
         for hx, hy, _hd in vision.detect_head_pixels(frame, grid.cell_w):
             cv2.circle(after, (hx, hy), 6, (255, 0, 0), -1)
-        cv2.imwrite(os.path.join(args.outdir, f"cut_move_{move_number:03d}_after.png"), after)
+        cv2.imwrite(os.path.join(args.moves_dir, f"cut_move_{move_number:03d}_after.png"), after)
     return "max_moves"
 
 
@@ -305,7 +305,7 @@ def main() -> None:
     parser.add_argument("--levels", type=int, default=None, help="Stop after this many levels (with --all)")
     parser.add_argument("--max-moves", type=int, default=300, help="Safety limit of taps per level")
     parser.add_argument("--delay", type=float, default=0.3, help="Extra delay after each tap (s)")
-    parser.add_argument("--outdir", default="imgs/grid_finder", help="Directory for debug images")
+    parser.add_argument("--moves-dir", default="imgs/moves", help="Directory for played-move images")
     args = parser.parse_args()
 
     adb_client.ensure_device()
@@ -323,7 +323,7 @@ def main() -> None:
         for row, col, direction in moves:
             x, y = grid.cell_center(row, col)
             print(f"  ({row},{col}) {direction} -> tap ({x},{y})")
-        save_debug(os.path.join(args.outdir, "simulate.png"), frame, grid, heads, occupancy)
+        save_debug(os.path.join(args.moves_dir, "simulate.png"), frame, grid, heads, occupancy)
         return
 
     if not args.all:
