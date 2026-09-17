@@ -182,8 +182,8 @@ def build_grid(
     x_min, y_min, x_max, y_max = board
     x0 = _align_origin(x_phase, cell_w, x_min) - pad * cell_w
     y0 = _align_origin(y_phase, cell_h, y_min) - pad * cell_h
-    cols = int(round((x_max - x_min) / cell_w)) + 2 * pad
-    rows = int(round((y_max - y_min) / cell_h)) + 2 * pad
+    cols = int(np.ceil((x_max - x_min) / cell_w)) + 2 * pad
+    rows = int(np.ceil((y_max - y_min) / cell_h)) + 2 * pad
     return Grid(x0=x0, y0=y0, cell_w=cell_w, cell_h=cell_h, cols=cols, rows=rows, pad=pad)
 
 
@@ -290,8 +290,8 @@ def build_grid_arrows(image: np.ndarray, pad: int = 2) -> Grid:
     x_min, y_min, x_max, y_max = box
     x0 = _align_origin(x_phase, cell, x_min) - pad * cell
     y0 = _align_origin(y_phase, cell, y_min) - pad * cell
-    cols = int(round((x_max - x_min) / cell)) + 2 * pad
-    rows = int(round((y_max - y_min) / cell)) + 2 * pad
+    cols = int(np.ceil((x_max - x_min) / cell)) + 2 * pad
+    rows = int(np.ceil((y_max - y_min) / cell)) + 2 * pad
     return Grid(x0=x0, y0=y0, cell_w=cell, cell_h=cell, cols=cols, rows=rows, pad=pad)
 
 
@@ -343,7 +343,10 @@ def _triangle_template(direction: str, size: int) -> np.ndarray:
 
 def _head_direction(black: np.ndarray, cx: int, cy: int, size: int, min_score: float) -> str | None:
     half = 32
-    window = black[cy - half : cy + half, cx - half : cx + half]
+    # Pad the image so that heads near the border still get a full window (a raw
+    # slice with a negative index, e.g. cx-32 < 0, would silently be empty).
+    padded = cv2.copyMakeBorder(black, half, half, half, half, cv2.BORDER_CONSTANT, value=0)
+    window = padded[cy : cy + 2 * half, cx : cx + 2 * half]
     if window.shape[0] < size or window.shape[1] < size:
         return None
     best, best_score = None, min_score
@@ -352,7 +355,7 @@ def _head_direction(black: np.ndarray, cx: int, cy: int, size: int, min_score: f
         result = cv2.matchTemplate(
             window.astype(np.float32), template, cv2.TM_CCORR_NORMED, mask=template
         )
-        score = float(result.max())
+        score = float(np.nanmax(result))
         if score > best_score:
             best_score, best = score, direction
     return best

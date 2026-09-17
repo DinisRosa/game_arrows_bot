@@ -94,16 +94,26 @@ def play_level(frame: np.ndarray, grid: vision.Grid, args: argparse.Namespace) -
     """Play the current level. Returns 'completed', 'no_moves', 'stuck' or 'max_moves'."""
     failures = 0
     for move_number in range(1, args.max_moves + 1):
-        heads = vision.detect_arrowheads(frame, grid)
-        if not heads:
-            return "completed"
-        occupancy = vision.build_occupancy(frame, grid)
-        moves = [
-            move
-            for move in solver.playable_moves(grid, occupancy, heads)
-            if grid.inside_board(move[0], move[1])
-            and vision.tap_allowed(args.tap_mask, *grid.cell_center(move[0], move[1]))
-        ]
+        for attempt in range(2):
+            heads = vision.detect_arrowheads(frame, grid)
+            if not heads:
+                return "completed"
+            occupancy = vision.build_occupancy(frame, grid)
+            moves = [
+                move
+                for move in solver.playable_moves(grid, occupancy, heads)
+                if grid.inside_board(move[0], move[1])
+                and vision.tap_allowed(args.tap_mask, *grid.cell_center(move[0], move[1]))
+            ]
+            if moves or attempt == 1:
+                break
+            # No moves: the board may have changed (arrows auto-leave) or the frame
+            # was captured mid-animation. Wait for a stable frame and re-detect the
+            # grid (dots become visible as the board empties) before giving up.
+            frame = wait_for_stable()
+            fresh = detect_board(frame)
+            if fresh is not None:
+                grid = fresh
         if not moves:
             return "no_moves"
 
@@ -121,18 +131,30 @@ def play_level(frame: np.ndarray, grid: vision.Grid, args: argparse.Namespace) -
         adb_client.tap(x, y)
         time.sleep(args.delay)
 
+        left = False
         for _ in range(6):
             frame = capture.get_frame()
             new_occupancy = vision.build_occupancy(frame, grid)
             if new_occupancy[row, col] == vision.EMPTY:
-                failures = 0
+                left = True
                 break
             time.sleep(0.25)
-        else:
+        if not left:
+            # The tap did nothing: either the arrow is blocked, or the level just
+            # finished and the game already loaded a new (full) board.
+            fresh = detect_board(frame)
+            if (
+                fresh is not None
+                and len(vision.detect_arrowheads(frame, fresh)) > max(len(heads), 12) * 2
+            ):
+                print("  a new level has loaded - treating as completed")
+                return "completed"
             failures += 1
             print(f"    arrow did not leave ({failures})")
             if failures >= 2:
                 return "stuck"
+        else:
+            failures = 0
         save_debug(
             os.path.join(args.moves_dir, f"move_{move_number:03d}_after.png"),
             frame,
