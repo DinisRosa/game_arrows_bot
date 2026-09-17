@@ -69,14 +69,17 @@ def pan_toward(
     margin: int = 3,
     step: int = 350,
 ) -> str | None:
-    """Pan one axis to bring model cell (row, col) inside the frame. Returns direction."""
+    """Pan one axis to bring model cell (row, col) into the blue (allowed) area."""
+    cell = frame_grid.cell
+    top = int(np.ceil(stitch.TOP_MARGIN / cell)) + 1
+    bottom = int(np.ceil(stitch.BOTTOM_MARGIN / cell)) + 1
     vr, vc = view
     local_r, local_c = row - vr, col - vc
     over_r = 0
-    if local_r < margin:
-        over_r = local_r - margin
-    elif local_r > frame_grid.rows - 1 - margin:
-        over_r = local_r - (frame_grid.rows - 1 - margin)
+    if local_r < top:
+        over_r = local_r - top
+    elif local_r > frame_grid.rows - 1 - bottom:
+        over_r = local_r - (frame_grid.rows - 1 - bottom)
     over_c = 0
     if local_c < margin:
         over_c = local_c - margin
@@ -208,8 +211,15 @@ def play(args: argparse.Namespace) -> str:
     os.makedirs(args.moves_dir, exist_ok=True)
     failures = 0
     refreshes = 0
+    blocked: set[tuple[int, int]] = set()
+    top_cells = int(np.ceil(stitch.TOP_MARGIN / cell)) + 1
+    bottom_cells = int(np.ceil(stitch.BOTTOM_MARGIN / cell)) + 1
     for move_number in range(1, args.max_moves + 1):
-        moves = solver.playable_moves(grid, occupancy, heads)
+        moves = [
+            move
+            for move in solver.playable_moves(grid, occupancy, heads)
+            if (move[0], move[1]) not in blocked
+        ]
         if not moves and refreshes < args.max_refreshes:
             refreshes += 1
             print(f"  no moves - re-capturing the board (refresh {refreshes})")
@@ -217,19 +227,32 @@ def play(args: argparse.Namespace) -> str:
             grid, occupancy, heads, model_symbols, cell, stats = build_model(
                 args.frames_dir, args.cell
             )
+            top_cells = int(np.ceil(stitch.TOP_MARGIN / cell)) + 1
+            bottom_cells = int(np.ceil(stitch.BOTTOM_MARGIN / cell)) + 1
             located = initial_locate(model_symbols, occupancy, heads, cell)
             if located is None:
                 print("  could not locate the view after refresh")
                 return "stuck"
             frame, frame_grid, view, alignment = located
-            moves = solver.playable_moves(grid, occupancy, heads)
+            blocked.clear()
+            moves = [
+                move
+                for move in solver.playable_moves(grid, occupancy, heads)
+                if (move[0], move[1]) not in blocked
+            ]
         if not moves:
             return "completed"
         row, col, direction = moves[0]
 
         for _ in range(args.max_pans):
             local_r, local_c = row - view[0], col - view[1]
-            if 2 <= local_r < frame_grid.rows - 2 and 2 <= local_c < frame_grid.cols - 2:
+            sx = int(round(frame_grid.x0 + local_c * cell))
+            sy = int(round(frame_grid.y0 + local_r * cell))
+            if (
+                top_cells <= local_r <= frame_grid.rows - 1 - bottom_cells
+                and 3 <= local_c <= frame_grid.cols - 1 - 3
+                and vision.tap_allowed(args.tap_mask, sx, sy)
+            ):
                 break
             panned = pan_toward(adb_client, frame_grid, view, row, col)
             if panned is None:
@@ -247,6 +270,10 @@ def play(args: argparse.Namespace) -> str:
         local_r, local_c = row - view[0], col - view[1]
         sx = int(round(frame_grid.x0 + local_c * cell))
         sy = int(round(frame_grid.y0 + local_r * cell))
+        if not vision.tap_allowed(args.tap_mask, sx, sy):
+            print("  target under the UI - skipping this move")
+            blocked.add((row, col))
+            continue
 
         candidates = [
             (hx, hy)
@@ -310,7 +337,14 @@ def main() -> None:
     parser.add_argument("--max-pans", type=int, default=10)
     parser.add_argument("--delay", type=float, default=0.3)
     parser.add_argument("--moves-dir", default="imgs/moves")
+    parser.add_argument("--mask", default="imgs/mask/mask.png", help="Tap mask (blue = allowed)")
     args = parser.parse_args()
+
+    try:
+        args.tap_mask = vision.load_tap_mask(args.mask)
+    except FileNotFoundError as error:
+        print(f"ERROR: {error}. The bot refuses to tap without a valid mask.")
+        return
 
     adb_client.ensure_device()
     print(f"Result: {play(args)}")

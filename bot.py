@@ -102,6 +102,7 @@ def play_level(frame: np.ndarray, grid: vision.Grid, args: argparse.Namespace) -
             move
             for move in solver.playable_moves(grid, occupancy, heads)
             if grid.inside_board(move[0], move[1])
+            and vision.tap_allowed(args.tap_mask, *grid.cell_center(move[0], move[1]))
         ]
         if not moves:
             return "no_moves"
@@ -200,16 +201,24 @@ def ensure_visible(
     col: int,
     offset: tuple[float, float],
     frame: np.ndarray,
+    mask: np.ndarray | None = None,
     margin: int = 160,
     max_step: int = 350,
 ) -> tuple[tuple[float, float], np.ndarray]:
-    """Pan (one axis at a time) until the given global cell is comfortably inside."""
+    """Pan (one axis at a time) until the target cell is comfortably inside the
+    allowed (blue) area of the mask (never under the top UI or the hint button)."""
     width, height = adb_client.screen_size()
     cx, cy = width // 2, height // 2
+    top = stitch.TOP_MARGIN + 40
+    bottom = height - stitch.BOTTOM_MARGIN - 40
     for _ in range(14):
         gx, gy = grid.cell_center(row, col)
         sx, sy = gx - offset[0], gy - offset[1]
-        if margin <= sx <= width - margin and margin <= sy <= height - margin:
+        if (
+            margin <= sx <= width - margin
+            and top <= sy <= bottom
+            and vision.tap_allowed(mask, int(sx), int(sy))
+        ):
             return offset, frame
         if abs(sx - cx) >= abs(sy - cy):
             delta = max(-max_step, min(max_step, sx - cx))
@@ -246,11 +255,25 @@ def play_cut_level(frame: np.ndarray, args: argparse.Namespace) -> str:
         moves = solver.playable_moves(grid, occupancy, heads)
         if not moves:
             return "no_moves"
-        row, col, direction = moves[0]
-        offset, frame = ensure_visible(adb_client, grid, row, col, offset, frame)
-        gx, gy = grid.cell_center(row, col)
-        sx, sy = int(gx - offset[0]), int(gy - offset[1])
         width, height = adb_client.screen_size()
+        chosen = None
+        for crow, ccol, cdir in moves:
+            offset, frame = ensure_visible(
+                adb_client, grid, crow, ccol, offset, frame, mask=args.tap_mask
+            )
+            gx, gy = grid.cell_center(crow, ccol)
+            csx, csy = int(gx - offset[0]), int(gy - offset[1])
+            if (
+                0 <= csx < width
+                and 0 <= csy < height
+                and vision.tap_allowed(args.tap_mask, csx, csy)
+            ):
+                chosen = (crow, ccol, cdir, csx, csy)
+                break
+        if chosen is None:
+            print("  no allowed move (all under the UI) - stopping")
+            return "stuck"
+        row, col, direction, sx, sy = chosen
         if not (0 <= sx < width and 0 <= sy < height):
             print("  target still off screen - stopping")
             return "stuck"
@@ -306,7 +329,14 @@ def main() -> None:
     parser.add_argument("--max-moves", type=int, default=300, help="Safety limit of taps per level")
     parser.add_argument("--delay", type=float, default=0.3, help="Extra delay after each tap (s)")
     parser.add_argument("--moves-dir", default="imgs/moves", help="Directory for played-move images")
+    parser.add_argument("--mask", default="imgs/mask/mask.png", help="Tap mask (blue = allowed)")
     args = parser.parse_args()
+
+    try:
+        args.tap_mask = vision.load_tap_mask(args.mask)
+    except FileNotFoundError as error:
+        print(f"ERROR: {error}. The bot refuses to tap without a valid mask.")
+        return
 
     adb_client.ensure_device()
 
@@ -318,7 +348,11 @@ def main() -> None:
         frame, grid = detected
         heads = vision.detect_arrowheads(frame, grid)
         occupancy = vision.build_occupancy(frame, grid)
-        moves = solver.playable_moves(grid, occupancy, heads)
+        moves = [
+            move
+            for move in solver.playable_moves(grid, occupancy, heads)
+            if vision.tap_allowed(args.tap_mask, *grid.cell_center(move[0], move[1]))
+        ]
         print(f"Grid {grid.cols}x{grid.rows} | arrows {len(heads)} | playable {len(moves)}")
         for row, col, direction in moves:
             x, y = grid.cell_center(row, col)

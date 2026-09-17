@@ -512,3 +512,25 @@ def estimate_shift(
     window = cv2.createHanningWindow((gray_a.shape[1], region.stop - region.start), cv2.CV_32F)
     (dx, dy), response = cv2.phaseCorrelate(gray_a[region], gray_b[region], window)
     return float(dx), float(dy), float(response)
+
+
+def load_tap_mask(path: str = "imgs/mask/mask.png") -> np.ndarray:
+    """Load the tap mask: True = allowed (blue), False = forbidden (UI).
+
+    The mask is a screenshot-sized image where the board area is blue and the
+    UI (top bar, hint button) is red. Raises if the file is missing, so the bot
+    never taps without a valid mask.
+    """
+    image = cv2.imread(path)
+    if image is None:
+        raise FileNotFoundError(f"tap mask not found: {path}")
+    return image[:, :, 0].astype(np.int16) > image[:, :, 2].astype(np.int16)
+
+
+def tap_allowed(mask: np.ndarray | None, x: int, y: int) -> bool:
+    """Whether a screen tap at (x, y) is inside the allowed (blue) area."""
+    if mask is None:
+        return True
+    if not (0 <= x < mask.shape[1] and 0 <= y < mask.shape[0]):
+        return False
+    return bool(mask[y, x])
