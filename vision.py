@@ -408,8 +408,11 @@ def detect_arrowheads(
     min_score: float = 0.9,
     top_margin: int = 400,
     bottom_margin: int = 300,
+    occupancy: np.ndarray | None = None,
 ) -> dict[tuple[int, int], str]:
     """Detect arrowheads and return {(row, col): direction} for the given grid."""
+    if occupancy is None:
+        occupancy = build_occupancy(image, grid)
     heads: dict[tuple[int, int], str] = {}
     for x, y, direction in detect_head_pixels(
         image,
@@ -422,7 +425,7 @@ def detect_arrowheads(
     ):
         row = int(round((y - grid.y0) / grid.cell_h))
         col = int(round((x - grid.x0) / grid.cell_w))
-        if 0 <= row < grid.rows and 0 <= col < grid.cols:
+        if grid.inside_board(row, col) and occupancy[row, col] == OCCUPIED:
             heads.setdefault((row, col), direction)
     return heads
 

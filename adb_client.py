@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import atexit
 import subprocess
+import time
 
 import cv2
 import numpy as np
@@ -95,6 +96,20 @@ def tap(x: int, y: int) -> None:
         _adb("shell", "input", "tap", str(x), str(y))
 
 
+def tap_batch(coords: list[tuple[int, int]]) -> None:
+    """Tap multiple (x, y) coordinates sequentially in a single ADB shell stream write."""
+    if not coords:
+        return
+    try:
+        shell = _get_shell()
+        payload = "".join(f"input tap {x} {y}\n" for x, y in coords)
+        shell.stdin.write(payload)
+        shell.stdin.flush()
+    except Exception:
+        for x, y in coords:
+            tap(x, y)
+
+
 def swipe(x1: int, y1: int, x2: int, y2: int, duration_ms: int = 300) -> None:
     """Swipe from (x1, y1) to (x2, y2) over duration_ms milliseconds."""
     try:
@@ -119,13 +134,18 @@ def screenshot_bytes() -> bytes:
     return _adb("exec-out", "screencap", "-p")
 
 
-def screenshot() -> np.ndarray:
+def screenshot(retries: int = 3) -> np.ndarray:
     """Capture a screenshot and decode it as a BGR image."""
-    data = np.frombuffer(screenshot_bytes(), dtype=np.uint8)
-    image = cv2.imdecode(data, cv2.IMREAD_COLOR)
-    if image is None:
-        raise AdbError("Failed to decode screenshot")
-    return image
+    for attempt in range(retries):
+        try:
+            data = np.frombuffer(screenshot_bytes(), dtype=np.uint8)
+            image = cv2.imdecode(data, cv2.IMREAD_COLOR)
+            if image is not None:
+                return image
+        except Exception:
+            pass
+        time.sleep(0.05)
+    raise AdbError("Failed to decode screenshot after retries")
 
 
 def save_screenshot(path: str) -> None:

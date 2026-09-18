@@ -58,7 +58,33 @@ def _shift(a: np.ndarray, b: np.ndarray, direction: str) -> tuple[float, float, 
         return 0.0, 0.0, 0.0
     result = cv2.matchTemplate(b, patch, cv2.TM_CCOEFF_NORMED)
     _, score, _, loc = cv2.minMaxLoc(result)
-    return float(loc[0] - x0), float(loc[1] - y0), float(score)
+    dx = float(loc[0] - x0)
+    dy = float(loc[1] - y0)
+
+    # Check if frame didn't move (clamped at board edge)
+    if abs(dx) < 5.0 and abs(dy) < 5.0:
+        return 0.0, 0.0, 1.0
+
+    # Physical direction validation: reject impossible shifts
+    max_ortho = 120.0
+    valid = True
+    if direction == "R":
+        if dx > -10 or abs(dy) > max_ortho:
+            valid = False
+    elif direction == "L":
+        if dx < 10 or abs(dy) > max_ortho:
+            valid = False
+    elif direction == "D":
+        if dy > -10 or abs(dx) > max_ortho:
+            valid = False
+    elif direction == "U":
+        if dy < 10 or abs(dx) > max_ortho:
+            valid = False
+
+    if not valid:
+        return 0.0, 0.0, 0.0
+
+    return dx, dy, float(score)
 
 
 def _pan(adb_client, direction: str, step: int, duration: int = 280) -> None:
@@ -85,27 +111,50 @@ def _scan(
     offset: tuple[float, float],
     frames: list,
     outdir: str | None,
-) -> tuple[np.ndarray, tuple[float, float]]:
+    stop_heads_count: int | None = None,
+    found_heads: set | None = None,
+) -> tuple[np.ndarray, tuple[float, float], bool]:
     """Pan in one horizontal direction until clamped, recording frames."""
     ox, oy = offset
+    stop_early = False
     for _ in range(max_steps):
+        if stop_heads_count is not None and found_heads is not None and len(found_heads) >= stop_heads_count:
+            stop_early = True
+            break
         _pan(adb_client, direction, step)
         time.sleep(settle)
         current = capture.get_frame()
         dx, dy, score = _shift(previous, current, direction)
         print(f"  {direction} shift=({dx:.0f},{dy:.0f}) score={score:.2f}", flush=True)
-        if abs(dx) < 5 and abs(dy) < 5:
+        if score >= 0.4 and abs(dx) < 5 and abs(dy) < 5:
             break  # edge reached
         if score < 0.4:
-            dx = -step if direction == "R" else step
+            dx = -step if direction == "R" else (step if direction == "L" else 0)
             dy = 0
         ox -= dx
         oy -= dy
         frames.append((current, (ox, oy)))
         if outdir:
             cv2.imwrite(os.path.join(outdir, f"stitch_frame_{len(frames) - 1:02d}.png"), current)
+        
+        if stop_heads_count is not None and found_heads is not None:
+            try:
+                g, _ = vision.detect_grid(current)
+                h = vision.detect_arrowheads(current, g)
+                for (r, c), d in h.items():
+                    gr = r + int(round(oy / g.cell_h))
+                    gc = c + int(round(ox / g.cell_w))
+                    found_heads.add((gr, gc))
+            except Exception:
+                pass
+            if len(found_heads) >= stop_heads_count:
+                print(f"  [Smart Stitching] Found {len(found_heads)}/{stop_heads_count} target heads! Stopping scan early.", flush=True)
+                stop_early = True
+                previous = current
+                break
+
         previous = current
-    return previous, (ox, oy)
+    return previous, (ox, oy), stop_early
 
 
 def capture_grid(
@@ -114,6 +163,7 @@ def capture_grid(
     max_steps: int = 8,
     settle: float = 0.5,
     outdir: str | None = None,
+    stop_heads_count: int | None = None,
 ):
     """Return [(frame, (offset_x, offset_y))] covering the board (2D raster)."""
     if outdir:
@@ -128,7 +178,7 @@ def capture_grid(
             current = capture.get_frame()
             dx, dy, score = _shift(previous, current, direction)
             print(f"  {direction} shift=({dx:.0f},{dy:.0f}) score={score:.2f}", flush=True)
-            if abs(dx) < 5 and abs(dy) < 5:
+            if score >= 0.4 and abs(dx) < 5 and abs(dy) < 5:
                 break  # edge reached
             previous = current
         frame = previous
@@ -137,12 +187,29 @@ def capture_grid(
     if outdir:
         cv2.imwrite(os.path.join(outdir, "stitch_frame_00.png"), frame)
 
+    found_heads: set[tuple[int, int]] = set()
+    if stop_heads_count is not None:
+        try:
+            g, _ = vision.detect_grid(frame)
+            h = vision.detect_arrowheads(frame, g)
+            for (r, c), d in h.items():
+                found_heads.add((r, c))
+        except Exception:
+            pass
+        if len(found_heads) >= stop_heads_count:
+            print(f"  [Smart Stitching] Found {len(found_heads)}/{stop_heads_count} target heads on initial frame! Stopping early.", flush=True)
+            return frames
+
     ox = oy = 0.0
     direction = "R"
     for _ in range(max_steps):
-        frame, (ox, oy) = _scan(
-            adb_client, direction, step, max_steps, settle, frame, (ox, oy), frames, outdir
+        frame, (ox, oy), stop_early = _scan(
+            adb_client, direction, step, max_steps, settle, frame, (ox, oy), frames, outdir,
+            stop_heads_count=stop_heads_count, found_heads=found_heads
         )
+        if stop_early:
+            break
+
         # move down one band
         previous = frame
         _pan(adb_client, "D", step)
@@ -150,7 +217,7 @@ def capture_grid(
         current = capture.get_frame()
         dx, dy, score = _shift(previous, current, "D")
         print(f"  D shift=({dx:.0f},{dy:.0f}) score={score:.2f}", flush=True)
-        if abs(dy) < 5:
+        if score >= 0.4 and abs(dy) < 5 and abs(dx) < 5:
             break  # bottom edge reached
         if score < 0.4:
             dy = -step
@@ -375,20 +442,20 @@ def pan_to_top_left(
             _pan(adb_client, direction, step)
             time.sleep(settle)
             current = capture.get_frame()
-            dx, dy, _score = _shift(previous, current, direction)
-            if abs(dx) < 5 and abs(dy) < 5:
+            dx, dy, score = _shift(previous, current, direction)
+            if score >= 0.4 and abs(dx) < 5 and abs(dy) < 5:
                 break
             previous = current
         frame = previous
 
 
 def capture_frames(
-    adb_client, step: int = 400, max_steps: int = 8, outdir: str = "imgs/frames"
+    adb_client, step: int = 400, max_steps: int = 8, outdir: str = "imgs/frames", stop_heads_count: int | None = None
 ):
     """Capture the board frames and save them (no merge) for grid-level stitching."""
     clear_dir(outdir)
     os.makedirs(outdir, exist_ok=True)
-    frames = capture_grid(adb_client, step=step, max_steps=max_steps)
+    frames = capture_grid(adb_client, step=step, max_steps=max_steps, outdir=outdir, stop_heads_count=stop_heads_count)
     lines = []
     for index, (frame, (ox, oy)) in enumerate(frames):
         cv2.imwrite(os.path.join(outdir, f"frame_{index:02d}.png"), frame)

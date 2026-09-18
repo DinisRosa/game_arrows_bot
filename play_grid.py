@@ -67,7 +67,7 @@ def pan_toward(
     row: int,
     col: int,
     margin: int = 3,
-    step: int = 350,
+    step: int = 800,
 ) -> str | None:
     """Pan one axis to bring model cell (row, col) into the blue (allowed) area."""
     cell = frame_grid.cell
@@ -213,9 +213,12 @@ def play(args: argparse.Namespace) -> str:
         print("  could not locate the current view in the model")
         return "stuck"
     frame, frame_grid, view, alignment = located
-    print(
-        f"view at model cell {view} (score={alignment.score:.3f} support={alignment.support})"
-    )
+    if alignment is not None:
+        print(
+            f"view at model cell {view} (score={alignment.score:.3f} support={alignment.support})"
+        )
+    else:
+        print(f"view at model cell {view} (fallback initial location)")
 
     os.makedirs(args.moves_dir, exist_ok=True)
     failures = 0
@@ -236,7 +239,7 @@ def play(args: argparse.Namespace) -> str:
             stitch.clear_dir(args.frames_dir)
             stitch.clear_dir("imgs/grids")
             stitch.clear_dir("imgs/stitching")
-            stitch.capture_frames(adb_client, outdir=args.frames_dir)
+            stitch.capture_frames(adb_client, outdir=args.frames_dir, stop_heads_count=len(heads))
             grid, occupancy, heads, model_symbols, cell, stats = build_model(
                 args.frames_dir, args.cell
             )

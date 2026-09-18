@@ -91,10 +91,57 @@ def wait_for_board_with_arrows() -> tuple[np.ndarray, vision.Grid] | None:
 
 
 def play_level(frame: np.ndarray, grid: vision.Grid, args: argparse.Namespace) -> str:
-    """Play the current level. Returns 'completed', 'no_moves', 'stuck' or 'max_moves'."""
+    """Play the current level rapidly using burst taps for all playable setas."""
+    move_number = 0
     failures = 0
-    for move_number in range(1, args.max_moves + 1):
-        for attempt in range(2):
+
+    while move_number < args.max_moves:
+        heads = vision.detect_arrowheads(frame, grid)
+        if not heads:
+            return "completed"
+
+        occupancy = vision.build_occupancy(frame, grid)
+        
+        # Local simulation: collect all playable moves including cascading ones
+        local_occupancy = occupancy.copy()
+        local_heads = dict(heads)
+        burst_taps: list[tuple[int, int, str, int, int]] = []
+
+        while True:
+            moves = [
+                move
+                for move in solver.playable_moves(grid, local_occupancy, local_heads)
+                if grid.inside_board(move[0], move[1])
+                and vision.tap_allowed(args.tap_mask, *grid.cell_center(move[0], move[1]))
+            ]
+            if not moves:
+                break
+
+            for move in moves:
+                row, col, direction = move
+                x, y = grid.cell_center(row, col)
+                burst_taps.append((row, col, direction, x, y))
+
+                # Clear local model cell to unlock cascading setas behind it
+                local_heads.pop((row, col), None)
+                local_occupancy[row, col] = vision.EMPTY
+
+        if not burst_taps:
+            # Check if board updated or level completed
+            time.sleep(0.2)
+            frame = capture.get_frame()
+            fresh_grid = detect_board(frame)
+            if fresh_grid is not None:
+                grid = fresh_grid
+            heads = vision.detect_arrowheads(frame, grid)
+            if not heads:
+                return "completed"
+            
+            # If still no moves on fresh frame, attempt wait_for_stable
+            frame = wait_for_stable()
+            fresh_grid = detect_board(frame)
+            if fresh_grid is not None:
+                grid = fresh_grid
             heads = vision.detect_arrowheads(frame, grid)
             if not heads:
                 return "completed"
@@ -105,63 +152,48 @@ def play_level(frame: np.ndarray, grid: vision.Grid, args: argparse.Namespace) -
                 if grid.inside_board(move[0], move[1])
                 and vision.tap_allowed(args.tap_mask, *grid.cell_center(move[0], move[1]))
             ]
-            if moves or attempt == 1:
-                break
-            # No moves: the board may have changed (arrows auto-leave) or the frame
-            # was captured mid-animation. Wait for a stable frame and re-detect the
-            # grid (dots become visible as the board empties) before giving up.
-            frame = wait_for_stable()
-            fresh = detect_board(frame)
-            if fresh is not None:
-                grid = fresh
-        if not moves:
-            return "no_moves"
+            if not moves:
+                failures += 1
+                if failures >= 2:
+                    return "no_moves"
+                continue
 
-        row, col, direction = moves[0]
-        x, y = grid.cell_center(row, col)
-        print(f"  move {move_number}: ({row},{col}) {direction} -> tap ({x},{y})")
-        save_debug(
-            os.path.join(args.moves_dir, f"move_{move_number:03d}_before.png"),
-            frame,
-            grid,
-            heads,
-            occupancy,
-            (row, col, direction),
-        )
-        adb_client.tap(x, y)
-        time.sleep(args.delay)
+        failures = 0
+        # Print and execute burst of taps
+        for row, col, direction, x, y in burst_taps:
+            move_number += 1
+            print(f"  move {move_number}: ({row},{col}) {direction} -> tap ({x},{y})")
+            if getattr(args, "save_debug", False):
+                save_debug(
+                    os.path.join(args.moves_dir, f"move_{move_number:03d}_before.png"),
+                    frame,
+                    grid,
+                    heads,
+                    occupancy,
+                    (row, col, direction),
+                )
 
-        left = False
-        for _ in range(6):
-            frame = capture.get_frame()
-            new_occupancy = vision.build_occupancy(frame, grid)
-            if new_occupancy[row, col] == vision.EMPTY:
-                left = True
-                break
-            time.sleep(0.25)
-        if not left:
-            # The tap did nothing: either the arrow is blocked, or the level just
-            # finished and the game already loaded a new (full) board.
-            fresh = detect_board(frame)
-            if (
-                fresh is not None
-                and len(vision.detect_arrowheads(frame, fresh)) > max(len(heads), 12) * 2
-            ):
+        if args.delay == 0:
+            # Send all taps in a single ultra-fast ADB shell batch stream
+            adb_client.tap_batch([(x, y) for _, _, _, x, y in burst_taps])
+        else:
+            for _, _, _, x, y in burst_taps:
+                adb_client.tap(x, y)
+                time.sleep(args.delay)
+
+        # Wait briefly for taps to register and arrows to start flying
+        time.sleep(0.1)
+        frame = capture.get_frame()
+
+        # Check if a new level has loaded
+        fresh_grid = detect_board(frame)
+        if fresh_grid is not None:
+            new_heads = vision.detect_arrowheads(frame, fresh_grid)
+            if len(new_heads) > max(len(heads), 12) * 2:
                 print("  a new level has loaded - treating as completed")
                 return "completed"
-            failures += 1
-            print(f"    arrow did not leave ({failures})")
-            if failures >= 2:
-                return "stuck"
-        else:
-            failures = 0
-        save_debug(
-            os.path.join(args.moves_dir, f"move_{move_number:03d}_after.png"),
-            frame,
-            grid,
-            vision.detect_arrowheads(frame, grid),
-            vision.build_occupancy(frame, grid),
-        )
+            grid = fresh_grid
+
     return "max_moves"
 
 
@@ -350,6 +382,7 @@ def main() -> None:
     parser.add_argument("--levels", type=int, default=None, help="Stop after this many levels (with --all)")
     parser.add_argument("--max-moves", type=int, default=300, help="Safety limit of taps per level")
     parser.add_argument("--delay", type=float, default=0.3, help="Extra delay after each tap (s)")
+    parser.add_argument("--save-debug", action="store_true", help="Save PNG debug images for played moves")
     parser.add_argument("--moves-dir", default="imgs/moves", help="Directory for played-move images")
     parser.add_argument("--mask", default="imgs/mask/mask.png", help="Tap mask (blue = allowed)")
     args = parser.parse_args()

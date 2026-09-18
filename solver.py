@@ -27,6 +27,8 @@ def is_playable(
     (padding cells are exit space). An occupied cell blocks the arrow; an unknown
     cell (off screen) also blocks it, to stay safe under the penalty rule.
     """
+    if not grid.inside_board(row, col) or occupancy[row, col] == vision.UNKNOWN:
+        return False
     dr, dc = _DIRECTIONS[direction]
     r, c = row + dr, col + dc
     while grid.inside_board(r, c):
