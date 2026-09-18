@@ -147,16 +147,21 @@ def relocate(
     cell: float,
     guess: tuple[int, int],
     window: int,
-    min_score: float = 0.6,
+    min_score: float = 0.5,
 ):
     """Locate the live frame and refresh the model from it.
 
     Tries a windowed search around `guess` first (fast); if that fails, falls back
     to a full search over the whole model so a big/unknown pan does not lose track.
+    If view is in an empty board area, falls back to `guess`.
     """
-    located = locate_view(model_symbols, frame, cell, guess=guess, window=window, min_score=min_score)
+    located = locate_view(model_symbols, frame, cell, guess=guess, window=window, min_support=2, min_score=min_score)
     if located is None and guess is not None:
-        located = locate_view(model_symbols, frame, cell, guess=None, min_score=0.4, min_support=20)
+        located = locate_view(model_symbols, frame, cell, guess=None, min_support=1, min_score=0.4)
+    if located is None and guess is not None:
+        frame_grid = gs.extract_grid(frame, cell, source="view")
+        refresh(model_symbols, occupancy, heads, frame_grid, guess)
+        return frame_grid, guess, None
     if located is None:
         return None
     frame_grid, view, alignment = located
@@ -168,7 +173,7 @@ def build_model(frames_dir: str, cell: float = 0.0):
     """Load the frames and build (grid, occupancy, heads, symbols, cell, stats)."""
     frames = stitch.load_frames(frames_dir)
     symbols, provenance, positions, cell, stats, grids = gs.stitch_all(
-        frames, cell=cell or None
+        frames, cell=cell or None, min_support=2
     )
     grid, occupancy, heads, model_symbols, trim = gs.to_model(
         symbols, provenance, cell, grids, positions
@@ -179,19 +184,23 @@ def build_model(frames_dir: str, cell: float = 0.0):
 def initial_locate(model_symbols, occupancy, heads, cell):
     """Locate the current view with a full search and refresh the model."""
     frame = capture.get_frame()
-    located = locate_view(model_symbols, frame, cell, guess=None)
+    located = locate_view(model_symbols, frame, cell, guess=None, min_support=2, min_score=0.5)
     if located is None:
-        located = locate_view(model_symbols, frame, cell, guess=None, min_score=0.4, min_support=20)
+        located = locate_view(model_symbols, frame, cell, guess=None, min_support=1, min_score=0.4)
     if located is None:
-        return None
+        frame_grid = gs.extract_grid(frame, cell, source="view")
+        view = (0, 0)
+        refresh(model_symbols, occupancy, heads, frame_grid, view)
+        return frame, frame_grid, view, None
     frame_grid, view, alignment = located
     refresh(model_symbols, occupancy, heads, frame_grid, view)
     return frame, frame_grid, view, alignment
 
 
 def play(args: argparse.Namespace) -> str:
-    if args.recapture:
-        print("re-capturing the board...")
+    manifest_path = os.path.join(args.frames_dir, "offsets.txt")
+    if args.recapture or not os.path.exists(manifest_path):
+        print("re-capturing the board from scratch...")
         stitch.capture_frames(adb_client, outdir=args.frames_dir)
     grid, occupancy, heads, model_symbols, cell, stats = build_model(args.frames_dir, args.cell)
     print(
@@ -306,8 +315,30 @@ def play(args: argparse.Namespace) -> str:
         sx, sy = best
 
         print(f"  move {move_number}: ({row},{col}) {direction} -> tap ({sx},{sy})")
-        before = frame.copy()
+        live_grid = vision.Grid(
+            x0=frame_grid.x0,
+            y0=frame_grid.y0,
+            cell_w=cell,
+            cell_h=cell,
+            cols=frame_grid.cols,
+            rows=frame_grid.rows,
+            pad=0,
+        )
+        live_heads = vision.detect_arrowheads(frame, live_grid)
+        before = vision.draw_heads(vision.draw_grid(frame, live_grid), live_grid, live_heads)
+        
+        # Draw target cell rectangle
+        tx0 = int(round(sx - cell / 2))
+        ty0 = int(round(sy - cell / 2))
+        tx1 = int(round(sx + cell / 2))
+        ty1 = int(round(sy + cell / 2))
+        cv2.rectangle(before, (tx0, ty0), (tx1, ty1), (0, 0, 255), 2)
         cv2.circle(before, (sx, sy), 22, (0, 0, 255), 4)
+
+        # Header text
+        txt = f"Move {move_number}: ({row},{col}) {direction} -> tap({sx},{sy}) view={view}"
+        cv2.putText(before, txt, (30, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2, cv2.LINE_AA)
+
         cv2.imwrite(os.path.join(args.moves_dir, f"play_move_{move_number:03d}_before.png"), before)
 
         adb_client.tap(sx, sy)
@@ -331,7 +362,19 @@ def play(args: argparse.Namespace) -> str:
         relocated = relocate(model_symbols, occupancy, heads, frame, cell, view, 6)
         if relocated is not None:
             frame_grid, view, alignment = relocated
-        cv2.imwrite(os.path.join(args.moves_dir, f"play_move_{move_number:03d}_after.png"), frame)
+        
+        after_grid = vision.Grid(
+            x0=frame_grid.x0,
+            y0=frame_grid.y0,
+            cell_w=cell,
+            cell_h=cell,
+            cols=frame_grid.cols,
+            rows=frame_grid.rows,
+            pad=0,
+        )
+        after_heads = vision.detect_arrowheads(frame, after_grid)
+        after = vision.draw_heads(vision.draw_grid(frame, after_grid), after_grid, after_heads)
+        cv2.imwrite(os.path.join(args.moves_dir, f"play_move_{move_number:03d}_after.png"), after)
     return "max_moves"
 
 

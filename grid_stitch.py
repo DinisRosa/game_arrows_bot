@@ -164,7 +164,7 @@ def align(
     b: FrameGrid,
     dc_range: range,
     dr_range: range,
-    min_support: int = 15,
+    min_support: int = 2,
     min_score: float = 0.5,
     score_band: float = 0.05,
 ) -> Alignment | None:

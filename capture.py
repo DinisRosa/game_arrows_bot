@@ -19,8 +19,8 @@ import adb_client
 
 FIFO = "/tmp/autoarrows_stream.fifo"
 
-# Fast stream enabled by default, with automatic fallback to adb_client.screenshot().
-USE_STREAM = True
+# Set to False so screencap is used for 100% fresh, unbuffered frames.
+USE_STREAM = False
 
 
 class Stream:
@@ -46,13 +46,11 @@ class Stream:
         try:
             w, h = adb_client.screen_size()
             self.target_width, self.target_height = w, h
-            stream_w, stream_h = max(300, w // 2), max(600, h // 2)
-            size_arg = f"--size {stream_w}x{stream_h}"
         except Exception:
-            size_arg = "--size 610x1356"
+            self.target_width, self.target_height = 1220, 2712
 
         command = (
-            f"adb exec-out screenrecord --output-format=h264 {size_arg} --time-limit 180 - > {self.fifo}"
+            f"adb exec-out screenrecord --output-format=h264 --time-limit 180 - > {self.fifo}"
         )
         self.proc = subprocess.Popen(command, shell=True)
         time.sleep(0.3)
