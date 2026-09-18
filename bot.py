@@ -375,6 +375,46 @@ def play_cut_level(frame: np.ndarray, args: argparse.Namespace) -> str:
     return "max_moves"
 
 
+def handle_cut_board_choice(
+    frame: np.ndarray, args: argparse.Namespace
+) -> tuple[str | None, np.ndarray, vision.Grid | None]:
+    """When the board appears cut/larger than screen, ask the user whether to scan or adjust manually.
+
+    Returns (result, fresh_frame, fresh_grid).
+    If result is not None, the level was played via stitching and result is returned.
+    If result is None, the user chose to adjust manually, and fresh_frame/fresh_grid are returned.
+    """
+    if getattr(args, "no_prompt", False):
+        print("Board is larger than the screen - stitching first...")
+        return play_cut_level(frame, args), frame, None
+
+    print("\n" + "=" * 65)
+    print("⚠️  AVISO: A grelha parece tocar os limites do ecrã.")
+    print("O bot detetou que o tabuleiro pode ser maior do que o ecrã visível.")
+    print("O que pretendes fazer?")
+    print("  [1] Dar scan/stitching automático (varrer o tabuleiro)")
+    print("  [2] Ajustar o ecrã no telemóvel para a grelha toda caber no ecrã (Recomendado)")
+    print("=" * 65)
+    try:
+        choice = input("Escolhe a opção [1/2] (predefinição = 2): ").strip()
+    except (EOFError, KeyboardInterrupt):
+        choice = "1"
+
+    if choice == "1":
+        print("A iniciar scan/stitching automático...")
+        return play_cut_level(frame, args), frame, None
+
+    print("\n👉 Ajusta/aproxima o ecrã no telemóvel até a grelha toda ficar visível.")
+    try:
+        input("Quando o ecrã estiver ajustado, prime ENTER para continuar a jogar...")
+    except (EOFError, KeyboardInterrupt):
+        pass
+
+    frame = wait_for_stable()
+    grid = detect_board(frame)
+    return None, frame, grid
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Play Arrows automatically.")
     parser.add_argument("--simulate", action="store_true", help="Only list playable moves, do not tap")
@@ -383,6 +423,7 @@ def main() -> None:
     parser.add_argument("--max-moves", type=int, default=300, help="Safety limit of taps per level")
     parser.add_argument("--delay", type=float, default=0.3, help="Extra delay after each tap (s)")
     parser.add_argument("--save-debug", action="store_true", help="Save PNG debug images for played moves")
+    parser.add_argument("--no-prompt", action="store_true", help="Do not prompt when board is cut, auto-stitch immediately")
     parser.add_argument("--moves-dir", default="imgs/moves", help="Directory for played-move images")
     parser.add_argument("--mask", default="imgs/mask/mask.png", help="Tap mask (blue = allowed)")
     args = parser.parse_args()
@@ -418,13 +459,18 @@ def main() -> None:
     if not args.all:
         frame = wait_for_stable()
         if board_is_cut(frame):
-            print("Board is larger than the screen - stitching first...")
-            print(f"Result: {play_cut_level(frame, args)}")
-            return
-        grid = detect_board(frame)
-        if grid is None or not vision.detect_arrowheads(frame, grid):
-            print("Could not detect the board. Is the game visible on screen?")
-            return
+            result, frame, grid = handle_cut_board_choice(frame, args)
+            if result is not None:
+                print(f"Result: {result}")
+                return
+            if grid is None or not vision.detect_arrowheads(frame, grid):
+                print("Could not detect the board after adjustment. Is the game visible on screen?")
+                return
+        else:
+            grid = detect_board(frame)
+            if grid is None or not vision.detect_arrowheads(frame, grid):
+                print("Could not detect the board. Is the game visible on screen?")
+                return
         print(f"Grid: {grid.cols}x{grid.rows} cells, cell={grid.cell_w:.1f}x{grid.cell_h:.1f}px, pad={grid.pad}")
         print(f"Result: {play_level(frame, grid, args)}")
         return
@@ -437,11 +483,20 @@ def main() -> None:
         frame, grid = detected
         level += 1
         if board_is_cut(frame):
-            print(f"Level {level}: board larger than screen - stitching")
-            result = play_cut_level(frame, args)
+            result, frame, grid = handle_cut_board_choice(frame, args)
+            if result is not None:
+                print(f"Level {level}: {result}")
+                if result != "completed":
+                    print("Stopping.")
+                    break
+                print("Level complete. Start the next level (handle any ads) - waiting...")
+                continue
+            if grid is None or not vision.detect_arrowheads(frame, grid):
+                print("Could not detect the board after adjustment. Stopping.")
+                break
         else:
             print(f"Level {level}: grid {grid.cols}x{grid.rows}, cell={grid.cell_w:.1f}px")
-            result = play_level(frame, grid, args)
+        result = play_level(frame, grid, args)
         print(f"Level {level}: {result}")
         if result != "completed":
             print("Stopping.")

@@ -64,6 +64,7 @@ O módulo `vision.py` é o núcleo de perceção do bot:
 ### 3.5. Automação e Execução Ultra-Rápida (`bot.py` & `play_grid.py`)
 - **`bot.py`**:
   - Executa níveis normais ou contínuos (`--all`).
+  - **Menu Interativo de Tabuleiro Cortado (`handle_cut_board_choice`)**: Quando deteta que a grelha toca os limites do ecrã, o bot pergunta interativamente ao utilizador se prefere fazer escaneamento/stitching automático `[1]` ou se prefere ajustar/aproximar o ecrã manualmente no telemóvel para jogar tudo num só ecrã `[2]`.
   - **Burst & Local Cascading**: Simula localmente o desobstruir de setas em cascata e dispara toques em bloco (`tap_batch`) na velocidade máxima (`--delay 0`), completando níveis em 1-2 segundos.
 - **`play_grid.py`**:
   - Motor para tabuleiros gigantes com tratamento seguro contra referências nulas (`alignment is None`).
