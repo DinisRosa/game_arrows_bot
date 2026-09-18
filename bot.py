@@ -224,7 +224,7 @@ def ensure_visible(
     offset: tuple[float, float],
     frame: np.ndarray,
     mask: np.ndarray | None = None,
-    margin: int = 160,
+    margin: int = 20,
     max_step: int = 350,
 ) -> tuple[tuple[float, float], np.ndarray]:
     """Pan (one axis at a time) until the target cell is comfortably inside the

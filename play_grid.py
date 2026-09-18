@@ -258,7 +258,7 @@ def play(args: argparse.Namespace) -> str:
             sy = int(round(frame_grid.y0 + local_r * cell))
             if (
                 top_cells <= local_r <= frame_grid.rows - 1 - bottom_cells
-                and 3 <= local_c <= frame_grid.cols - 1 - 3
+                and 0 <= local_c < frame_grid.cols
                 and vision.tap_allowed(args.tap_mask, sx, sy)
             ):
                 in_view = True
@@ -274,7 +274,7 @@ def play(args: argparse.Namespace) -> str:
             frame_grid, view, alignment = relocated
 
         local_r, local_c = row - view[0], col - view[1]
-        if not in_view or not (top_cells <= local_r <= frame_grid.rows - 1 - bottom_cells and 3 <= local_c <= frame_grid.cols - 1 - 3):
+        if not in_view or not (top_cells <= local_r <= frame_grid.rows - 1 - bottom_cells and 0 <= local_c < frame_grid.cols):
             print(f"  target ({row},{col}) is not inside visible bounds - skipping")
             blocked.add((row, col))
             continue
