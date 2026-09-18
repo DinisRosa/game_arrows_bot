@@ -367,6 +367,8 @@ def detect_head_pixels(
     dark_max: int = 200,
     head_ratio: float = 0.16,
     min_score: float = 0.9,
+    top_margin: int = 400,
+    bottom_margin: int = 300,
 ) -> list[tuple[int, int, str]]:
     """Detect arrowheads and return (x, y, direction) in screen pixels.
 
@@ -375,6 +377,7 @@ def detect_head_pixels(
     handled by using a saturation-aware foreground mask.
     """
     black = foreground_mask(image, dark_max=dark_max)
+    height = black.shape[0]
     distance = cv2.distanceTransform(black, cv2.DIST_L2, 5)
     window = int(round(cell_w * 0.4)) | 1
     local_max = cv2.dilate(distance, np.ones((window, window), np.uint8))
@@ -383,6 +386,10 @@ def detect_head_pixels(
     results: list[tuple[int, int, str]] = []
     seen: set[tuple[int, int]] = set()
     for y, x in zip(*np.where(peaks)):
+        if top_margin > 0 and y < top_margin:
+            continue
+        if bottom_margin > 0 and y > height - bottom_margin:
+            continue
         key = (int(x) // int(cell_w), int(y) // int(cell_w))
         if key in seen:
             continue
@@ -399,11 +406,19 @@ def detect_arrowheads(
     dark_max: int = 200,
     head_ratio: float = 0.16,
     min_score: float = 0.9,
+    top_margin: int = 400,
+    bottom_margin: int = 300,
 ) -> dict[tuple[int, int], str]:
     """Detect arrowheads and return {(row, col): direction} for the given grid."""
     heads: dict[tuple[int, int], str] = {}
     for x, y, direction in detect_head_pixels(
-        image, grid.cell_w, dark_max=dark_max, head_ratio=head_ratio, min_score=min_score
+        image,
+        grid.cell_w,
+        dark_max=dark_max,
+        head_ratio=head_ratio,
+        min_score=min_score,
+        top_margin=top_margin,
+        bottom_margin=bottom_margin,
     ):
         row = int(round((y - grid.y0) / grid.cell_h))
         col = int(round((x - grid.x0) / grid.cell_w))

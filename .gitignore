@@ -6,3 +6,6 @@ __pycache__/
 # generated outputs inside imgs/ (photos and text files)
 imgs/**/*.png
 imgs/**/*.txt
+
+# ...but the tap mask is a required asset, keep it
+!imgs/mask/mask.png

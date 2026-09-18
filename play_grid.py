@@ -220,9 +220,13 @@ def play(args: argparse.Namespace) -> str:
             for move in solver.playable_moves(grid, occupancy, heads)
             if (move[0], move[1]) not in blocked
         ]
-        if not moves and refreshes < args.max_refreshes:
+        if not moves and heads and refreshes < args.max_refreshes:
             refreshes += 1
-            print(f"  no moves - re-capturing the board (refresh {refreshes})")
+            print(f"  no moves ({len(heads)} heads remain) - resetting to top-left and re-stitching (refresh {refreshes})")
+            stitch.pan_to_top_left(adb_client)
+            stitch.clear_dir(args.frames_dir)
+            stitch.clear_dir("imgs/grids")
+            stitch.clear_dir("imgs/stitching")
             stitch.capture_frames(adb_client, outdir=args.frames_dir)
             grid, occupancy, heads, model_symbols, cell, stats = build_model(
                 args.frames_dir, args.cell
@@ -241,9 +245,13 @@ def play(args: argparse.Namespace) -> str:
                 if (move[0], move[1]) not in blocked
             ]
         if not moves:
-            return "completed"
+            if not heads:
+                return "completed"
+            return "stuck"
+
         row, col, direction = moves[0]
 
+        in_view = False
         for _ in range(args.max_pans):
             local_r, local_c = row - view[0], col - view[1]
             sx = int(round(frame_grid.x0 + local_c * cell))
@@ -253,6 +261,7 @@ def play(args: argparse.Namespace) -> str:
                 and 3 <= local_c <= frame_grid.cols - 1 - 3
                 and vision.tap_allowed(args.tap_mask, sx, sy)
             ):
+                in_view = True
                 break
             panned = pan_toward(adb_client, frame_grid, view, row, col)
             if panned is None:
@@ -263,11 +272,13 @@ def play(args: argparse.Namespace) -> str:
                 print("  lost the view while panning")
                 return "stuck"
             frame_grid, view, alignment = relocated
-        else:
-            print("  could not bring the target into view")
-            return "stuck"
 
         local_r, local_c = row - view[0], col - view[1]
+        if not in_view or not (top_cells <= local_r <= frame_grid.rows - 1 - bottom_cells and 3 <= local_c <= frame_grid.cols - 1 - 3):
+            print(f"  target ({row},{col}) is not inside visible bounds - skipping")
+            blocked.add((row, col))
+            continue
+
         sx = int(round(frame_grid.x0 + local_c * cell))
         sy = int(round(frame_grid.y0 + local_r * cell))
         if not vision.tap_allowed(args.tap_mask, sx, sy):
@@ -288,12 +299,9 @@ def play(args: argparse.Namespace) -> str:
                 best, best_dist = (hx, hy), distance
         if best is None or best_dist > cell * 1.5:
             print(
-                f"  target head not found (nearest {best_dist:.0f}px) - already left, skipping"
+                f"  target head not found (nearest {best_dist:.0f}px) - skipping"
             )
-            heads.pop((row, col), None)
-            occupancy[row, col] = vision.EMPTY
-            if 0 <= row < model_symbols.shape[0] and 0 <= col < model_symbols.shape[1]:
-                model_symbols[row, col] = gs.EMPTY
+            blocked.add((row, col))
             continue
         sx, sy = best
 

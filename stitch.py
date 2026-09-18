@@ -94,8 +94,11 @@ def _scan(
         current = capture.get_frame()
         dx, dy, score = _shift(previous, current, direction)
         print(f"  {direction} shift=({dx:.0f},{dy:.0f}) score={score:.2f}", flush=True)
-        if score < 0.4 or abs(dy) > 90 or (abs(dx) < 5 and abs(dy) < 5):
-            break
+        if abs(dx) < 5 and abs(dy) < 5:
+            break  # edge reached
+        if score < 0.4:
+            dx = -step if direction == "R" else step
+            dy = 0
         ox -= dx
         oy -= dy
         frames.append((current, (ox, oy)))
@@ -125,8 +128,8 @@ def capture_grid(
             current = capture.get_frame()
             dx, dy, score = _shift(previous, current, direction)
             print(f"  {direction} shift=({dx:.0f},{dy:.0f}) score={score:.2f}", flush=True)
-            if score < 0.4 or (abs(dx) < 5 and abs(dy) < 5):
-                break
+            if abs(dx) < 5 and abs(dy) < 5:
+                break  # edge reached
             previous = current
         frame = previous
 
@@ -147,8 +150,11 @@ def capture_grid(
         current = capture.get_frame()
         dx, dy, score = _shift(previous, current, "D")
         print(f"  D shift=({dx:.0f},{dy:.0f}) score={score:.2f}", flush=True)
-        if score < 0.4 or abs(dy) < 5:
+        if abs(dy) < 5:
             break  # bottom edge reached
+        if score < 0.4:
+            dy = -step
+            dx = 0
         ox -= dx
         oy -= dy
         frames.append((current, (ox, oy)))
@@ -344,12 +350,43 @@ def stitch(adb_client, step: int = 400, max_steps: int = 8, outdir: str | None =
     return grid, occupancy, heads, current_offset
 
 
+def clear_dir(dirpath: str) -> None:
+    """Clear all files inside a directory to ensure no stale cache remains."""
+    if os.path.exists(dirpath):
+        for fname in os.listdir(dirpath):
+            fpath = os.path.join(dirpath, fname)
+            if os.path.isfile(fpath):
+                try:
+                    os.remove(fpath)
+                except OSError:
+                    pass
+
+
+def pan_to_top_left(
+    adb_client, step: int = 400, max_steps: int = 8, settle: float = 0.5
+) -> None:
+    """Pan the board to the top-left corner."""
+    frame = capture.get_frame()
+    for direction in ("U", "L"):
+        previous = frame
+        for _ in range(max_steps):
+            _pan(adb_client, direction, step)
+            time.sleep(settle)
+            current = capture.get_frame()
+            dx, dy, _score = _shift(previous, current, direction)
+            if abs(dx) < 5 and abs(dy) < 5:
+                break
+            previous = current
+        frame = previous
+
+
 def capture_frames(
     adb_client, step: int = 400, max_steps: int = 8, outdir: str = "imgs/frames"
 ):
     """Capture the board frames and save them (no merge) for grid-level stitching."""
-    frames = capture_grid(adb_client, step=step, max_steps=max_steps)
+    clear_dir(outdir)
     os.makedirs(outdir, exist_ok=True)
+    frames = capture_grid(adb_client, step=step, max_steps=max_steps)
     lines = []
     for index, (frame, (ox, oy)) in enumerate(frames):
         cv2.imwrite(os.path.join(outdir, f"frame_{index:02d}.png"), frame)
