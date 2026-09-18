@@ -95,6 +95,9 @@ def play_level(frame: np.ndarray, grid: vision.Grid, args: argparse.Namespace) -
     move_number = 0
     failures = 0
 
+    if grid.cell_w < 35.0:
+        print(f"⚠️ AVISO: As células da grelha estão muito pequenas ({grid.cell_w:.1f}px). Se os toques falharem, faz ZOOM IN no ecrã do telemóvel.", flush=True)
+
     while move_number < args.max_moves:
         heads = vision.detect_arrowheads(frame, grid)
         if not heads:
@@ -125,6 +128,9 @@ def play_level(frame: np.ndarray, grid: vision.Grid, args: argparse.Namespace) -
                 # Clear local model cell to unlock cascading setas behind it
                 local_heads.pop((row, col), None)
                 local_occupancy[row, col] = vision.EMPTY
+
+            if len(burst_taps) >= 50:
+                break  # Cap burst to a safe size before capturing a fresh frame
 
         if not burst_taps:
             # Check if board updated or level completed
