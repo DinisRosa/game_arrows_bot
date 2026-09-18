@@ -351,9 +351,11 @@ def stitch(adb_client, step: int = 400, max_steps: int = 8, outdir: str | None =
 
 
 def clear_dir(dirpath: str) -> None:
-    """Clear all files inside a directory to ensure no stale cache remains."""
+    """Clear the generated files in a directory, keeping hidden files (.gitkeep)."""
     if os.path.exists(dirpath):
         for fname in os.listdir(dirpath):
+            if fname.startswith("."):
+                continue
             fpath = os.path.join(dirpath, fname)
             if os.path.isfile(fpath):
                 try:
