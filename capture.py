@@ -1,7 +1,7 @@
 """Fast frame source for the Auto-ARROWS bot.
 
 Uses the device `screenrecord` H.264 stream over a FIFO, decoded by OpenCV's
-FFMPEG backend. This gives frames in ~5-15 ms instead of ~2400 ms for
+FFMPEG backend. This gives frames in ~15-30 ms instead of ~2400 ms for
 `screencap`, and falls back to `adb_client.screenshot()` if the stream fails.
 """
 
@@ -10,17 +10,17 @@ from __future__ import annotations
 import atexit
 import os
 import subprocess
+import time
 
 import cv2
 import numpy as np
 
 import adb_client
 
-FIFO = "/tmp/opencode/autoarrows.fifo"
+FIFO = "/tmp/autoarrows_stream.fifo"
 
-# The screenrecord->FIFO->OpenCV stream proved unreliable (it can return a frozen
-# frame), so it is disabled by default and screencap is used instead.
-USE_STREAM = False
+# Fast stream enabled by default, with automatic fallback to adb_client.screenshot().
+USE_STREAM = True
 
 
 class Stream:
@@ -30,44 +30,58 @@ class Stream:
         self.fifo = fifo
         self.proc: subprocess.Popen | None = None
         self.cap: cv2.VideoCapture | None = None
+        self.target_width = 1220
+        self.target_height = 2712
         self._start()
 
     def _start(self) -> None:
         if os.path.exists(self.fifo):
-            os.remove(self.fifo)
+            try:
+                os.remove(self.fifo)
+            except OSError:
+                pass
+        os.makedirs(os.path.dirname(self.fifo) or ".", exist_ok=True)
         os.mkfifo(self.fifo)
+
+        try:
+            w, h = adb_client.screen_size()
+            self.target_width, self.target_height = w, h
+            stream_w, stream_h = max(300, w // 2), max(600, h // 2)
+            size_arg = f"--size {stream_w}x{stream_h}"
+        except Exception:
+            size_arg = "--size 610x1356"
+
         command = (
-            f"adb exec-out screenrecord --output-format=h264 --time-limit 180 - > {self.fifo}"
+            f"adb exec-out screenrecord --output-format=h264 {size_arg} --time-limit 180 - > {self.fifo}"
         )
         self.proc = subprocess.Popen(command, shell=True)
+        time.sleep(0.3)
         self.cap = cv2.VideoCapture(self.fifo, cv2.CAP_FFMPEG)
 
-    def frame(self, max_drain: int = 200, stable_diff: float = 0.5) -> np.ndarray | None:
-        """Read until the frame stabilises, returning the current screen.
-
-        The stream buffers frames faster than we consume them, so reading a fixed
-        number is not enough; we drain until two consecutive frames match.
-        """
+    def frame(self, max_drain: int = 30) -> np.ndarray | None:
+        """Return the latest frame from the video stream, resized to target dimensions."""
         if self.cap is None:
             return None
-        previous = None
-        frame = None
-        for _ in range(max_drain):
+        latest = None
+        count = 0
+        while count < max_drain:
             ok, current = self.cap.read()
             if not ok:
+                if latest is not None:
+                    break
                 self.restart()
                 if self.cap is None:
                     return None
-                continue
-            frame = current
-            if previous is not None:
-                diff = float(
-                    np.abs(current.astype(np.int16) - previous.astype(np.int16)).mean()
-                )
-                if diff < stable_diff:
-                    return current
-            previous = current
-        return frame
+                break
+            latest = current
+            count += 1
+
+        if latest is None:
+            return None
+
+        if (latest.shape[1], latest.shape[0]) != (self.target_width, self.target_height):
+            latest = cv2.resize(latest, (self.target_width, self.target_height))
+        return latest
 
     def restart(self) -> None:
         self.close()
@@ -105,7 +119,7 @@ def _get_stream() -> Stream | None:
     return _stream
 
 
-def get_frame(max_drain: int = 200) -> np.ndarray:
+def get_frame(max_drain: int = 30) -> np.ndarray:
     """Return the current screen.
 
     Uses the fast stream when enabled (USE_STREAM), otherwise screencap (reliable
@@ -115,9 +129,12 @@ def get_frame(max_drain: int = 200) -> np.ndarray:
         return adb_client.screenshot()
     stream = _get_stream()
     if stream is not None:
-        frame = stream.frame(max_drain=max_drain)
-        if frame is not None:
-            return frame
+        try:
+            frame = stream.frame(max_drain=max_drain)
+            if frame is not None:
+                return frame
+        except Exception:
+            pass
     return adb_client.screenshot()
 
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import atexit
 import subprocess
 
 import cv2
@@ -10,6 +11,39 @@ import numpy as np
 
 class AdbError(RuntimeError):
     """Raised when an ADB command fails or the device is not usable."""
+
+
+_shell_proc: subprocess.Popen | None = None
+
+
+def _get_shell() -> subprocess.Popen:
+    global _shell_proc
+    if _shell_proc is None or _shell_proc.poll() is not None:
+        try:
+            _shell_proc = subprocess.Popen(
+                ["adb", "shell"],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                text=True,
+                bufsize=1,
+            )
+        except Exception as error:
+            raise AdbError(f"Failed to start persistent ADB shell: {error}") from error
+    return _shell_proc
+
+
+def _close_shell() -> None:
+    global _shell_proc
+    if _shell_proc is not None:
+        try:
+            _shell_proc.terminate()
+        except Exception:
+            pass
+        _shell_proc = None
+
+
+atexit.register(_close_shell)
 
 
 def _adb(*args: str) -> bytes:
@@ -53,21 +87,31 @@ def screen_size() -> tuple[int, int]:
 
 def tap(x: int, y: int) -> None:
     """Tap the screen at device pixel coordinates (x, y)."""
-    _adb("shell", "input", "tap", str(x), str(y))
+    try:
+        shell = _get_shell()
+        shell.stdin.write(f"input tap {x} {y}\n")
+        shell.stdin.flush()
+    except Exception:
+        _adb("shell", "input", "tap", str(x), str(y))
 
 
 def swipe(x1: int, y1: int, x2: int, y2: int, duration_ms: int = 300) -> None:
     """Swipe from (x1, y1) to (x2, y2) over duration_ms milliseconds."""
-    _adb(
-        "shell",
-        "input",
-        "swipe",
-        str(x1),
-        str(y1),
-        str(x2),
-        str(y2),
-        str(duration_ms),
-    )
+    try:
+        shell = _get_shell()
+        shell.stdin.write(f"input swipe {x1} {y1} {x2} {y2} {duration_ms}\n")
+        shell.stdin.flush()
+    except Exception:
+        _adb(
+            "shell",
+            "input",
+            "swipe",
+            str(x1),
+            str(y1),
+            str(x2),
+            str(y2),
+            str(duration_ms),
+        )
 
 
 def screenshot_bytes() -> bytes:
