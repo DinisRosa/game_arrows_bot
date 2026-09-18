@@ -394,9 +394,40 @@ def render_board(grid: vision.Grid, occupancy: np.ndarray, heads: dict) -> np.nd
     return image
 
 
-def stitch(adb_client, step: int = 400, max_steps: int = 8, outdir: str | None = "imgs/stitching"):
+def prompt_center_board(no_prompt: bool = False) -> None:
+    """Prompt the user to center the grid on the phone screen before starting Center-Out stitching."""
+    if no_prompt:
+        print("\n[Stitching] A iniciar varrimento Center-Out a partir do centro (0,0)...", flush=True)
+        return
+    print("\n" + "=" * 65, flush=True)
+    print("📍 CONFIRMAÇÃO DE CENTRAGEM DA GRELHA", flush=True)
+    print("Por favor, centra o tabuleiro no ecrã do telemóvel.", flush=True)
+    print("O bot vai iniciar o varrimento a partir do centro (0,0) efetuando", flush=True)
+    print("pequenos deslizes para Cima, Baixo, Esquerda e Direita.", flush=True)
+    print("=" * 65, flush=True)
+    try:
+        input("A grid está centrada no ecrã? Prime ENTER para confirmar e iniciar...")
+    except (EOFError, KeyboardInterrupt):
+        pass
+    print("Iniciando varrimento Center-Out a partir do centro (0,0)...", flush=True)
+
+
+def stitch(
+    adb_client,
+    step: int = 500,
+    max_steps: int = 8,
+    outdir: str | None = "imgs/stitching",
+    centered: bool = True,
+    prompt: bool = True,
+    no_prompt: bool = False,
+):
     """Capture and merge the full board (2D)."""
-    frames = capture_grid(adb_client, step=step, max_steps=max_steps, outdir=outdir)
+    if centered and prompt:
+        prompt_center_board(no_prompt=no_prompt)
+    if centered:
+        frames = capture_grid_centered(adb_client, step=step, outdir=outdir)
+    else:
+        frames = capture_grid(adb_client, step=step, max_steps=max_steps, outdir=outdir)
     save_frame_grids(frames)
 
     def dot_count(item) -> int:
@@ -449,13 +480,138 @@ def pan_to_top_left(
         frame = previous
 
 
+def capture_grid_centered(
+    adb_client,
+    step: int = 500,
+    max_arm_steps: int = 2,
+    settle: float = 0.4,
+    outdir: str | None = None,
+    stop_heads_count: int | None = None,
+) -> list[tuple[np.ndarray, tuple[float, float]]]:
+    """Capture board frames using a fast Center-Out expansion scan.
+
+    Assumes the user has centered the board in the screen (offset 0,0).
+    Captures center, then expands Up, Down, Left, Right, and diagonal corners.
+    """
+    if outdir:
+        os.makedirs(outdir, exist_ok=True)
+
+    center_frame = capture.get_frame()
+    frames: list[tuple[np.ndarray, tuple[float, float]]] = [(center_frame, (0.0, 0.0))]
+    if outdir:
+        cv2.imwrite(os.path.join(outdir, "stitch_frame_00.png"), center_frame)
+
+    found_heads: set[tuple[int, int]] = set()
+    if stop_heads_count is not None:
+        try:
+            g, _ = vision.detect_grid(center_frame)
+            h = vision.detect_arrowheads(center_frame, g)
+            for (r, c), d in h.items():
+                found_heads.add((r, c))
+        except Exception:
+            pass
+        if len(found_heads) >= stop_heads_count:
+            print(f"  [Center-Out Stitching] Found {len(found_heads)}/{stop_heads_count} target heads on center frame! Stopping early.", flush=True)
+            return frames
+
+    def scan_arm(directions: list[str], back_directions: list[str]) -> bool:
+        nonlocal center_frame
+        curr_frame = center_frame
+        ox, oy = 0.0, 0.0
+        panned_steps = 0
+
+        for dir_out, dir_back in zip(directions, back_directions):
+            _pan(adb_client, dir_out, step)
+            time.sleep(settle)
+            next_frame = capture.get_frame()
+            dx, dy, score = _shift(curr_frame, next_frame, dir_out)
+            print(f"  Center-Out {dir_out} shift=({dx:.0f},{dy:.0f}) score={score:.2f}", flush=True)
+            if score >= 0.4 and abs(dx) < 5 and abs(dy) < 5:
+                break  # edge reached
+            if score < 0.4:
+                dx = -step if dir_out == "R" else (step if dir_out == "L" else 0)
+                dy = -step if dir_out == "D" else (step if dir_out == "U" else 0)
+            ox -= dx
+            oy -= dy
+            panned_steps += 1
+            frames.append((next_frame, (ox, oy)))
+            if outdir:
+                cv2.imwrite(os.path.join(outdir, f"stitch_frame_{len(frames) - 1:02d}.png"), next_frame)
+
+            if stop_heads_count is not None:
+                try:
+                    g, _ = vision.detect_grid(next_frame)
+                    h = vision.detect_arrowheads(next_frame, g)
+                    for (r, c), d in h.items():
+                        gr = r + int(round(oy / g.cell_h))
+                        gc = c + int(round(ox / g.cell_w))
+                        found_heads.add((gr, gc))
+                except Exception:
+                    pass
+                if len(found_heads) >= stop_heads_count:
+                    print(f"  [Center-Out Stitching] Found {len(found_heads)}/{stop_heads_count} target heads! Stopping scan early.", flush=True)
+                    for b_dir in back_directions[:panned_steps][::-1]:
+                        _pan(adb_client, b_dir, step)
+                        time.sleep(0.2)
+                    return True
+
+            curr_frame = next_frame
+
+        # Return back to center along this arm
+        for b_dir in back_directions[:panned_steps][::-1]:
+            _pan(adb_client, b_dir, step)
+            time.sleep(0.2)
+        return False
+
+    # 1. Scan Up arm
+    if scan_arm(["U"] * max_arm_steps, ["D"] * max_arm_steps):
+        return frames
+
+    # 2. Scan Down arm
+    if scan_arm(["D"] * max_arm_steps, ["U"] * max_arm_steps):
+        return frames
+
+    # 3. Scan Left arm
+    if scan_arm(["L"] * max_arm_steps, ["R"] * max_arm_steps):
+        return frames
+
+    # 4. Scan Right arm
+    if scan_arm(["R"] * max_arm_steps, ["L"] * max_arm_steps):
+        return frames
+
+    # 5. Scan Corner arms
+    corners = [
+        (["U", "L"], ["D", "R"]),
+        (["U", "R"], ["D", "L"]),
+        (["D", "L"], ["U", "R"]),
+        (["D", "R"], ["U", "L"]),
+    ]
+    for dirs_out, dirs_back in corners:
+        if scan_arm(dirs_out, dirs_back):
+            return frames
+
+    return frames
+
+
 def capture_frames(
-    adb_client, step: int = 400, max_steps: int = 8, outdir: str = "imgs/frames", stop_heads_count: int | None = None
+    adb_client,
+    step: int = 400,
+    max_steps: int = 8,
+    outdir: str = "imgs/frames",
+    stop_heads_count: int | None = None,
+    centered: bool = True,
+    prompt: bool = False,
+    no_prompt: bool = False,
 ):
     """Capture the board frames and save them (no merge) for grid-level stitching."""
     clear_dir(outdir)
     os.makedirs(outdir, exist_ok=True)
-    frames = capture_grid(adb_client, step=step, max_steps=max_steps, outdir=outdir, stop_heads_count=stop_heads_count)
+    if centered and prompt:
+        prompt_center_board(no_prompt=no_prompt)
+    if centered:
+        frames = capture_grid_centered(adb_client, step=step, outdir=outdir, stop_heads_count=stop_heads_count)
+    else:
+        frames = capture_grid(adb_client, step=step, max_steps=max_steps, outdir=outdir, stop_heads_count=stop_heads_count)
     lines = []
     for index, (frame, (ox, oy)) in enumerate(frames):
         cv2.imwrite(os.path.join(outdir, f"frame_{index:02d}.png"), frame)

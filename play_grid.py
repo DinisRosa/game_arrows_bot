@@ -200,8 +200,8 @@ def initial_locate(model_symbols, occupancy, heads, cell):
 def play(args: argparse.Namespace) -> str:
     manifest_path = os.path.join(args.frames_dir, "offsets.txt")
     if args.recapture or not os.path.exists(manifest_path):
-        print("re-capturing the board from scratch...")
-        stitch.capture_frames(adb_client, outdir=args.frames_dir)
+        print("re-capturing the board from scratch using Center-Out scan...")
+        stitch.capture_frames(adb_client, outdir=args.frames_dir, centered=True, prompt=True, no_prompt=getattr(args, "no_prompt", False))
     grid, occupancy, heads, model_symbols, cell, stats = build_model(args.frames_dir, args.cell)
     print(
         f"model: {grid.cols}x{grid.rows} cells, cell={cell:.2f}px, heads={len(heads)}, "
@@ -234,12 +234,18 @@ def play(args: argparse.Namespace) -> str:
         ]
         if not moves and heads and refreshes < args.max_refreshes:
             refreshes += 1
-            print(f"  no moves ({len(heads)} heads remain) - resetting to top-left and re-stitching (refresh {refreshes})")
-            stitch.pan_to_top_left(adb_client)
+            print(f"  no moves ({len(heads)} heads remain) - re-stitching using Center-Out scan (refresh {refreshes})")
             stitch.clear_dir(args.frames_dir)
             stitch.clear_dir("imgs/grids")
             stitch.clear_dir("imgs/stitching")
-            stitch.capture_frames(adb_client, outdir=args.frames_dir, stop_heads_count=len(heads))
+            stitch.capture_frames(
+                adb_client,
+                outdir=args.frames_dir,
+                stop_heads_count=len(heads),
+                centered=True,
+                prompt=True,
+                no_prompt=getattr(args, "no_prompt", False),
+            )
             grid, occupancy, heads, model_symbols, cell, stats = build_model(
                 args.frames_dir, args.cell
             )
@@ -390,6 +396,7 @@ def main() -> None:
     parser.add_argument("--max-moves", type=int, default=300)
     parser.add_argument("--max-pans", type=int, default=10)
     parser.add_argument("--delay", type=float, default=0.3)
+    parser.add_argument("--no-prompt", action="store_true", help="Do not prompt to confirm centering, auto-stitch immediately")
     parser.add_argument("--moves-dir", default="imgs/moves")
     parser.add_argument("--mask", default="imgs/mask/mask.png", help="Tap mask (blue = allowed)")
     args = parser.parse_args()

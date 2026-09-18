@@ -13,7 +13,9 @@ Este documento detalha o plano de otimização de velocidade do bot e as funcion
 - [x] **Rajadas de Toques e Cascata Local (`bot.py`)**:
   - O bot calcula todas as setas livres num único frame e simula localmente a desobstrução de setas em cascata.
   - Dispara todas as jogadas calculadas numa rajada instantânea sem esperar pelas animações do jogo. Níveis normais são limpos em **1 a 2 segundos**.
-- [x] **Smart Stitching & Paragem Antecipada (`stitch.py`)**:
+- [x] **Smart Stitching & Varrimento Center-Out (`stitch.py`)**:
+  - **Escaneamento a partir do Centro (`capture_grid_centered`)**: Começa diretamente a partir da origem `(0,0)` com pequenos deslizes em cruz (Cima, Baixo, Esquerda, Direita e Diagonais). Evita a perda de tempo de varrer cantos superiores vazios e reduz o número de deslizes de ~25-40 para apenas 4-8.
+  - **Confirmação Interativa (`prompt_center_board`)**: Pergunta ao utilizador se a grelha está centrada no ecrã e aguarda ENTER antes de dar início ao varrimento. Suporta a opção `--no-prompt` para execução autónoma.
   - Deteção imediata dos limites físicos da grelha (`abs(dx)<5` e `abs(dy)<5`), eliminando deslizes desnecessários contra as paredes do ecrã.
   - Paragem antecipada do escaneamento (`stop_heads_count`) quando restam poucas setas no tabuleiro: interrompe a varredura assim que as setas restantes são detetadas nos primeiros frames.
 - [x] **Eliminação de Gravamento de Imagens em Execução Rápida**:

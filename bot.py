@@ -299,7 +299,9 @@ def ensure_visible(
 
 def play_cut_level(frame: np.ndarray, args: argparse.Namespace) -> str:
     """Stitch a board larger than the screen and play it on the global model."""
-    grid, occupancy, heads, offset = stitch.stitch(adb_client)
+    grid, occupancy, heads, offset = stitch.stitch(
+        adb_client, centered=True, prompt=True, no_prompt=getattr(args, "no_prompt", False)
+    )
     print(f"  stitched board {grid.cols}x{grid.rows}, heads {len(heads)}, offset=({offset[0]:.0f},{offset[1]:.0f})")
     frame = capture.get_frame()
     failures = 0

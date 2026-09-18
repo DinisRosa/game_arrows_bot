@@ -55,7 +55,8 @@ O módulo `vision.py` é o núcleo de perceção do bot:
 
 ### 3.4. Reconstrução e Escaneamento Inteligente (`stitch.py` & `grid_stitch.py`)
 1. **`stitch.py` (Stitching de Imagem/Píxeis)**:
-   - Executa uma varredura 2D (raster scan) com **paragem imediata nas bordas** (`abs(dx)<5` e `abs(dy)<5`).
+   - **Varrimento Center-Out (`capture_grid_centered`)**: Em vez de fazer 4-5 deslizes longos até ao canto superior esquerdo (onde a maioria do ecrã costuma ser espaço em branco), o bot solicita a centragem da grelha (`prompt_center_board`) e realiza pequenos deslizes em cruz/estrela a partir do centro `(0, 0)` (Cima, Baixo, Esquerda, Direita e Diagonais).
+   - **Confirmação Interativa de Centragem (`prompt_center_board`)**: Pergunta ao utilizador se a grelha está centrada e aguarda pela tecla ENTER antes de iniciar os deslizes.
    - **Smart Stitching (`stop_heads_count`)**: Interrompe antecipadamente o escaneamento assim que todas as setas restantes no tabuleiro forem identificadas nos primeiros frames.
 2. **`grid_stitch.py` (Stitching Discreto de Símbolos)**:
    - Converte cada imagem numa matriz discreta de símbolos (`?`, `.`, `#`, `^`, `v`, `<`, `>`).
