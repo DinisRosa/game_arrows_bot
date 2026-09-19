@@ -123,9 +123,17 @@ def _scan(
             break
         _pan(adb_client, direction, step)
         time.sleep(settle)
-        current = capture.get_frame()
+        t0 = time.perf_counter()
+        current = capture.get_frame(prefer_stream=True)
+        t_cap = time.perf_counter() - t0
+        t1 = time.perf_counter()
         dx, dy, score = _shift(previous, current, direction)
-        print(f"  {direction} shift=({dx:.0f},{dy:.0f}) score={score:.2f}", flush=True)
+        t_shift = time.perf_counter() - t1
+        print(
+            f"  {direction} shift=({dx:.0f},{dy:.0f}) score={score:.2f}"
+            f"  [cap={t_cap*1000:.0f}ms shift={t_shift*1000:.0f}ms]",
+            flush=True,
+        )
         if score >= 0.4 and abs(dx) < 5 and abs(dy) < 5:
             break  # edge reached
         if score < 0.4:
@@ -136,7 +144,7 @@ def _scan(
         frames.append((current, (ox, oy)))
         if outdir:
             cv2.imwrite(os.path.join(outdir, f"stitch_frame_{len(frames) - 1:02d}.png"), current)
-        
+
         if stop_heads_count is not None and found_heads is not None:
             try:
                 g, _ = vision.detect_grid(current)
@@ -169,13 +177,13 @@ def capture_grid(
     if outdir:
         os.makedirs(outdir, exist_ok=True)
 
-    frame = capture.get_frame()
+    frame = capture.get_frame(prefer_stream=True)
     for direction in ("U", "L"):  # go to the top-left corner
         previous = frame
         for _ in range(max_steps):
             _pan(adb_client, direction, step)
             time.sleep(settle)
-            current = capture.get_frame()
+            current = capture.get_frame(prefer_stream=True)
             dx, dy, score = _shift(previous, current, direction)
             print(f"  {direction} shift=({dx:.0f},{dy:.0f}) score={score:.2f}", flush=True)
             if score >= 0.4 and abs(dx) < 5 and abs(dy) < 5:
@@ -214,7 +222,7 @@ def capture_grid(
         previous = frame
         _pan(adb_client, "D", step)
         time.sleep(settle)
-        current = capture.get_frame()
+        current = capture.get_frame(prefer_stream=True)
         dx, dy, score = _shift(previous, current, "D")
         print(f"  D shift=({dx:.0f},{dy:.0f}) score={score:.2f}", flush=True)
         if score >= 0.4 and abs(dy) < 5 and abs(dx) < 5:
@@ -236,24 +244,44 @@ def save_frame_grids(
     frames,
     frames_dir: str = "imgs/frames",
     grids_dir: str = "imgs/grids",
+    save_images: bool = False,
 ) -> None:
-    """Save each captured frame in frames/ and its annotated grid in grids/."""
-    os.makedirs(frames_dir, exist_ok=True)
-    os.makedirs(grids_dir, exist_ok=True)
-    for index, (frame, offset) in enumerate(frames):
-        cv2.imwrite(os.path.join(frames_dir, f"frame_{index:02d}.png"), frame)
+    """Log per-frame grid info; optionally save raw frames and annotated grids.
+
+    Parameters
+    ----------
+    save_images:
+        When True, write raw frame PNGs to frames_dir and annotated grid PNGs
+        to grids_dir (useful for visual debugging).  When False (the default
+        for fast / production runs), only prints the per-frame summary line
+        without any disk I/O or redundant grid-detection work.
+    """
+    if save_images:
+        os.makedirs(frames_dir, exist_ok=True)
+        os.makedirs(grids_dir, exist_ok=True)
+    for index, frame_item in enumerate(frames):
+        frame, offset = frame_item[0], frame_item[1]
+        # Reuse pre-detected grid/heads stored alongside the frame (Phase 3
+        # optimisation) to avoid running detect_grid + detect_arrowheads twice.
+        cached_grid = frame_item[2] if len(frame_item) > 2 else None
+        cached_heads = frame_item[3] if len(frame_item) > 3 else None
         try:
-            grid, method = vision.detect_grid(frame)
-            heads = vision.detect_arrowheads(frame, grid)
-            vis = vision.draw_heads(vision.draw_grid(frame, grid), grid, heads)
-            cv2.imwrite(os.path.join(grids_dir, f"grid_{index:02d}.png"), vis)
+            grid = cached_grid if cached_grid is not None else vision.detect_grid(frame)[0]
+            method = "cached" if cached_grid is not None else "detected"
+            heads = cached_heads if cached_heads is not None else vision.detect_arrowheads(frame, grid)
             print(
                 f"  frame {index}: [{method}] cell={grid.cell_w:.1f} grid={grid.cols}x{grid.rows} "
                 f"heads={len(heads)} offset=({offset[0]:.0f},{offset[1]:.0f})",
                 flush=True,
             )
+            if save_images:
+                cv2.imwrite(os.path.join(frames_dir, f"frame_{index:02d}.png"), frame)
+                vis = vision.draw_heads(vision.draw_grid(frame, grid), grid, heads)
+                cv2.imwrite(os.path.join(grids_dir, f"grid_{index:02d}.png"), vis)
         except Exception as error:  # noqa: BLE001
             print(f"  frame {index}: grid failed ({error})", flush=True)
+            if save_images:
+                cv2.imwrite(os.path.join(frames_dir, f"frame_{index:02d}.png"), frame)
 
 
 def _frame_phase(frame: np.ndarray, cell: float) -> tuple[float, float]:
@@ -466,13 +494,13 @@ def pan_to_top_left(
     adb_client, step: int = 400, max_steps: int = 8, settle: float = 0.5
 ) -> None:
     """Pan the board to the top-left corner."""
-    frame = capture.get_frame()
+    frame = capture.get_frame(prefer_stream=True)
     for direction in ("U", "L"):
         previous = frame
         for _ in range(max_steps):
             _pan(adb_client, direction, step)
             time.sleep(settle)
-            current = capture.get_frame()
+            current = capture.get_frame(prefer_stream=True)
             dx, dy, score = _shift(previous, current, direction)
             if score >= 0.4 and abs(dx) < 5 and abs(dy) < 5:
                 break
@@ -496,7 +524,7 @@ def capture_grid_centered(
     if outdir:
         os.makedirs(outdir, exist_ok=True)
 
-    center_frame = capture.get_frame()
+    center_frame = capture.get_frame(prefer_stream=True)
     frames: list[tuple[np.ndarray, tuple[float, float]]] = [(center_frame, (0.0, 0.0))]
     if outdir:
         cv2.imwrite(os.path.join(outdir, "stitch_frame_00.png"), center_frame)
@@ -523,9 +551,17 @@ def capture_grid_centered(
         for dir_out, dir_back in zip(directions, back_directions):
             _pan(adb_client, dir_out, step)
             time.sleep(settle)
-            next_frame = capture.get_frame()
+            t0 = time.perf_counter()
+            next_frame = capture.get_frame(prefer_stream=True)
+            t_cap = time.perf_counter() - t0
+            t1 = time.perf_counter()
             dx, dy, score = _shift(curr_frame, next_frame, dir_out)
-            print(f"  Center-Out {dir_out} shift=({dx:.0f},{dy:.0f}) score={score:.2f}", flush=True)
+            t_shift = time.perf_counter() - t1
+            print(
+                f"  Center-Out {dir_out} shift=({dx:.0f},{dy:.0f}) score={score:.2f}"
+                f"  [cap={t_cap*1000:.0f}ms shift={t_shift*1000:.0f}ms]",
+                flush=True,
+            )
             if score >= 0.4 and abs(dx) < 5 and abs(dy) < 5:
                 break  # edge reached
             if score < 0.4:
@@ -636,14 +672,14 @@ def capture_n(
     consecutive frames overlap. Saves the raw frames and the offsets manifest.
     """
     os.makedirs(outdir, exist_ok=True)
-    frame = capture.get_frame()
+    frame = capture.get_frame(prefer_stream=True)
     ox = oy = 0.0
     frames = [(frame, (ox, oy))]
     previous = frame
     for _ in range(count - 1):
         _pan(adb_client, direction, step)
         time.sleep(settle)
-        current = capture.get_frame()
+        current = capture.get_frame(prefer_stream=True)
         dx, dy, score = _shift(previous, current, direction)
         print(f"  {direction} shift=({dx:.0f},{dy:.0f}) score={score:.2f}", flush=True)
         if score < 0.4 or (abs(dx) < 5 and abs(dy) < 5):
